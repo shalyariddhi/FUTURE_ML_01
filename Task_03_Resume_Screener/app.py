@@ -43,12 +43,18 @@ def extract_skills(text):
 
 
 def get_fit_label(score):
-    p = score * 100
-    if p >= 40:
-        return "🔥 Strong Fit"
-    elif p >= 20:
-        return "👍 Medium Fit"
-    return "⚠️ Weak Fit"
+    """
+    Returns a single string for the label and a recommendation separately 
+    to make the UI and CSV export cleaner.
+    """
+    if score >= 0.85:
+        return "Excellent Match", "Highly Recommended."
+    elif score >= 0.70:
+        return "Good Match", "Strong Potential."
+    elif score >= 0.50:
+        return "Average Match", "Requires Review."
+    else:
+        return "Low Match", "Not a fit for this role."
 
 
 jd_text = st.text_area("Paste Job Description")
@@ -58,49 +64,51 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-
 if st.button("Analyze"):
+    if not jd_text or not uploaded_files:
+        st.error("Please provide both a Job Description and at least one Resume.")
+    else:
+        results = []
+        jd_text_cleaned = clean_text(jd_text)
+        jd_skills = extract_skills(jd_text_cleaned)
 
-    results = []
+        for file in uploaded_files:
+            resume_text = clean_text(extract_text_from_pdf(file))
 
-    jd_text = clean_text(jd_text)
-    jd_skills = extract_skills(jd_text)
+            if len(resume_text) < 300:
+                st.warning(f"{file.name} has very little readable text.")
+                continue
 
-    for file in uploaded_files:
+            score = calculate_match_score(jd_text_cleaned, resume_text)
+            resume_skills = extract_skills(resume_text)
 
-        resume_text = clean_text(extract_text_from_pdf(file))
+            matched = [s for s in jd_skills if s in resume_skills]
+            missing = [s for s in jd_skills if s not in resume_skills]
+            
+            # Get label and recommendation
+            label, rec = get_fit_label(score)
 
-        if len(resume_text) < 300:
-            st.warning(f"{file.name} has very little readable text.")
-            continue
+            results.append({
+                "name": file.name,
+                "score": score,
+                "label": label,
+                "recommendation": rec,
+                "matched": matched,
+                "missing": missing
+            })
 
-        score = calculate_match_score(jd_text, resume_text)
-
-        resume_skills = extract_skills(resume_text)
-
-        matched = [s for s in jd_skills if s in resume_skills]
-        missing = [s for s in jd_skills if s not in resume_skills]
-
-        results.append({
-            "name": file.name,
-            "score": score,
-            "fit": get_fit_label(score),
-            "matched": matched,
-            "missing": missing
-        })
 
     results.sort(key=lambda x: x["score"], reverse=True)
 
-    st.subheader("⭐ Top Recommended Candidates")
-
-    for i, c in enumerate(results[:3], start=1):
-        st.write(f"{i}. {c['name']} — {c['fit']} ({c['score']*100:.2f}%)")
-
+        st.subheader("⭐ Top Recommended Candidates")
+        for i, c in enumerate(results[:3], start=1):
+            st.success(f"{i}. {c['name']} — **{c['label']}** ({c['score']*100:.2f}%)")
     report = pd.DataFrame([
         {
             "Name": r["name"],
             "Match Score (%)": round(r["score"]*100, 2),
-            "Fit Level": r["fit"],
+            "Fit Level": r["label"],
+            "Recommendation": r["recommendation"],
             "Matched Skills": ", ".join(r["matched"]),
             "Missing Skills": ", ".join(r["missing"])
         }
@@ -113,13 +121,27 @@ if st.button("Analyze"):
         "resume_shortlist_report.csv",
         "text/csv"
     )
-
-    st.subheader("Ranked Candidates")
-
+    st.subheader("Detailed Candidate Analysis")
     for r in results:
-        st.markdown("---")
-        st.subheader(r["name"])
-        st.write(f"Match Score: {r['score']*100:.2f}%")
-        st.write("Fit Level:", r["fit"])
-        st.write("✅ Matched Skills:", ", ".join(r["matched"]))
-        st.write("❌ Missing Skills:", ", ".join(r["missing"]))
+        with st.expander(f"View Analysis for {r['name']}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Match Score", f"{r['score']*100:.1f}%")
+                st.write(f"**Fit Status:** {r['label']}")
+            with col2:
+                st.write(f"**Recommendation:** {r['recommendation']}")
+
+                # Skill Gap Visualization
+            st.markdown("---")
+            st.write("### 🔍 Skill Gap Analysis")
+            if r['matched']:
+                st.write(f"✅ **Matched Skills:** {', '.join(r['matched'])}")
+                
+            if r['missing']:
+                # This is the "Pro Tip" logic: alerting the recruiter to missing needs
+                st.error(f"❌ **Missing Skills (Gap):** {', '.join(r['missing'])}")
+                st.info(f"💡 Suggestion: Candidate needs training or experience in **{r['missing'][0]}**.")
+            else:
+                 st.balloons()
+                st.write("🌟 **Perfect Skill Match!** No gaps identified from the Job Description.")
+  
